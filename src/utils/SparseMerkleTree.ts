@@ -38,30 +38,30 @@ export class SparseMerkleTree {
     }
 
     private createTree(leaves: Map<string, string>, depth: number, defaultNodes: Array<string>) {
-        let tree: Array<Map<string, string>> = [leaves];
+        let tree: Array<Map<string, string>> = [leaves]; // all leaves that composed with [token txHash] pairs at level 0.
         let treeLevel: Map<string, string> = leaves;
 
         let nextLevel: Map<string, string>;
         let halfIndex: string;
 
-        for (let level = 0; level < depth; level++) {
+        for (let level = 0; level < depth; level++) { // compute the depth (i.e. 64) levels merkle tree
             nextLevel = new Map();
             for(let [slot, hash] of treeLevel) {
-                halfIndex = new BN(slot).div(new BN(2)).toString();
-                if (new BN(slot).mod(new BN(2)).isZero()) {
+            halfIndex = new BN(slot).div(new BN(2)).toString(); // compute the next level merkle tree node index, e.g. [0 txHash] [1, txHash] at level 0, then the halfIndex is 0/2=0 indexed at level 1.
+            if (new BN(slot).mod(new BN(2)).isZero()) { // if the slot(tokenID) is even, then compute it and its right sibling hash together to form the next level hash
                     let coIndex: string = new BN(slot).add(new BN(1)).toString();
                     nextLevel.set(halfIndex, utils.soliditySha3(hash, treeLevel.get(coIndex) || defaultNodes[level]));
-                } else {
+                    } else { // if the slot(tokenID) is odd, we should check its left sibling is exists or not, if missing, we compute with default hash.
                     let coIndex: string = new BN(slot).sub(new BN(1)).toString();
                     if (treeLevel.get(coIndex) === undefined) {
                         nextLevel.set(halfIndex, utils.soliditySha3(defaultNodes[level], hash));
                     }
                 }
             }
-            treeLevel = nextLevel;
+            treeLevel = nextLevel; // from the level 1 to level 64-1.
             tree.push(treeLevel);
         }
-        return tree;
+        return tree; // returns [leavels, level2Hashes, level3Hashes, ..., rootHash]
     }
 
     createMerkleProof(slot: string) {
@@ -72,9 +72,9 @@ export class SparseMerkleTree {
         let siblingHash: string | undefined;
         for (let level=0; level < this.depth; level++) {
             siblingIndex = index.mod(new BN(2)).isZero() ? index.add(new BN(1)) : index.sub(new BN(1));
-            index = index.div(new BN(2));
+            index = index.div(new BN(2)); // collect hash of next level in order to prove the slot targeted txHash is included in merkle tree.
 
-            siblingHash = this.tree[level] ? this.tree[level].get(siblingIndex.toString()) : undefined;
+            siblingHash = this.tree[level] ? this.tree[level].get(siblingIndex.toString()) : undefined; // generate the merkle tree proof path for current slot.
             if (siblingHash) {
                 proof += siblingHash.replace('0x', '');
                 proofBits = proofBits.bincn(level);
