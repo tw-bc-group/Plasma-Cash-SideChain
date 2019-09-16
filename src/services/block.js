@@ -1,14 +1,13 @@
+import {CryptoUtils} from "../utils/CryptoUtils";
+import {Utils} from "../utils/Utils";
+
 const moment = require('moment')
     , debug = require('debug')('app:services:transaction')
     , async = require('async')
     , EthUtils = require('ethereumjs-util')
     , { BigNumber } = require('bignumber.js')
     , { TransactionService, BlockService, CoinStateService } = require('../services')
-    , { updateOwner }	= require('../services/coinState')
-    , { getHighestOcurrence, groupBy } = require('../utils/utils')
-    , { generateDepositBlockRootHash, generateTransactionHash, generateSMTFromTransactions } = require('../utils/cryptoUtils')
-    , { submitBlock } = require('../utils/cryptoUtils')
-    , { blockToJson } = require( "../utils/utils");
+    , { updateOwner }	= require('../services/coinState');
 
 
 const blockInterval = new BigNumber(1000);
@@ -17,11 +16,11 @@ const blockInterval = new BigNumber(1000);
 const createBlock = (transactions, blockNumber, cb) => {
 	const timestamp = moment.now();
 
-	const maxSlotCount = getHighestOcurrence(transactions.map(t => t.slot));
+	const maxSlotCount = Utils.getHighestOccurrence(transactions.map(t => t.slot));
 	if(maxSlotCount > 1) return cb({ statusCode: 500, message: "Trying to mine 2 slots at once"});
 
 
-	const sparseMerkleTree = generateSMTFromTransactions(transactions);
+	const sparseMerkleTree = CryptoUtils.generateSMTFromTransactions(transactions);
 	const rootHash = sparseMerkleTree.root;
 
 	if(!rootHash) return cb({statusCode: 500, message: "Problem calculating merkle root hash"});
@@ -98,7 +97,7 @@ const mineBlock = (cb) => {
 		if (err) return cb(err);
 
 		const { lastBlock, transactions } = results;
-		const groupedTransactions = groupBy(transactions, "slot");
+		const groupedTransactions = Utils.groupTransactionsBySlot(transactions);
 		reduceTransactionsBySlot(Object.values(groupedTransactions), (err, transactions) => {
 
 			if(err) return cb(err);
@@ -111,13 +110,13 @@ const mineBlock = (cb) => {
 				nextNumber = lastBlock.block_number.minus(rest).plus(blockInterval);
 			}
 
-			debug('mining')
 			createBlock(transactions, nextNumber, (err, block) => {
+				debug(`mining ${block}`)
 				if(err) return cb(err);
 
-				submitBlock(block, (err)=> {
+                CryptoUtils.submitBlock(block, (err)=> {
 					if(err) return cb(err);
-					cb(null, { statusCode: 201, message: blockToJson(block) });
+					cb(null, { statusCode: 201, message: Utils.blockToJson(block) });
 				})
 			});
 		});
@@ -157,12 +156,12 @@ const depositBlock = (slot, blockNumber, _owner, cb) => {
 	const blockNumberBN = new BigNumber(blockNumber);
 	if(blockNumberBN.isNaN()) return cb({ statusCode: 400, message: 'Invalid blockNumber'});
 
-	const rootHash = generateDepositBlockRootHash(slotBN);
+	const rootHash = CryptoUtils.generateDepositBlockRootHash(slotBN);
 
 	const blockSpent = new BigNumber(0);
 	const nullAddress = EthUtils.bufferToHex(EthUtils.setLengthLeft(0, 20));
 
-	const hash = generateTransactionHash(slotBN, blockSpent, owner);
+	const hash = CryptoUtils.generateTransactionHash(slotBN, blockSpent, owner);
 	const timestamp = Date.now();
 
 	BlockService.findById(blockNumberBN)
@@ -201,7 +200,7 @@ const depositBlock = (slot, blockNumber, _owner, cb) => {
 							transactions: [t]
 						}, (err, block) => {
 							if(err) return cb(err);
-							cb(null, {statusCode: 201, message: blockToJson(block)})
+							cb(null, {statusCode: 201, message: Utils.blockToJson(block)})
 						});
 					});
 				});
@@ -222,7 +221,7 @@ const getProof = (slot, blockNumber, cb) => {
 	.exec((err, block) => {
 		if (err) return cb(err);
 
-		const sparseMerkleTree = generateSMTFromTransactions(block.transactions);
+		const sparseMerkleTree = CryptoUtils.generateSMTFromTransactions(block.transactions);
 
 		const proof = sparseMerkleTree.createMerkleProof(slotBN.toFixed());
 		cb(null, proof);

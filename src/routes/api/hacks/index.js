@@ -1,5 +1,7 @@
-const  {blockToJson}  = require( "../../../utils/utils");
-const  {blockInterval}  = require( "../../../services/block");
+import {CryptoUtils} from "../../../utils/CryptoUtils";
+import {Utils} from "../../../utils/Utils";
+
+const  {blockInterval}  = require( "../../../services/block.js");
 const  {generateSMTFromTransactions, getTransactionBytes, submitBlock}  = require( "../../../utils/cryptoUtils");
 const  { BlockService }  = require( '../../../services');
 
@@ -80,7 +82,7 @@ router.post('/transactions/create', (req, res, next) => {
 
 			};
 
-			const sparseMerkleTree = generateSMTFromTransactions([t]);
+			const sparseMerkleTree = CryptoUtils.generateSMTFromTransactions([t]);
 			const rootHash = sparseMerkleTree.root;
 
 			BlockService.create({
@@ -90,12 +92,12 @@ router.post('/transactions/create', (req, res, next) => {
 				transactions: [] //TODO create empty block cause we dont want no corrupted transactions in our DB
 			}, (err, block) => {
 				if(err) return responseWithStatus(res)(err);
-				submitBlock(block, (err) => {
+                CryptoUtils.submitBlock(block, (err) => {
 					if(err) return responseWithStatus(res)(err) //TODO rollback block creation
 
-					let blockJSON =  blockToJson(block);
+					let blockJSON =  Utils.blockToJson(block);
 					blockJSON.transactions = [t];
-					let exitingBytes = getTransactionBytes(t.slot, t.block_spent, t.recipient);
+					let exitingBytes = CryptoUtils.getTransactionBytes(t.slot, t.block_spent, t.recipient);
 
 					const message = {
 						block: blockJSON,

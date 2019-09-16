@@ -1,6 +1,7 @@
+import {CryptoUtils} from "../utils/CryptoUtils";
+import {Utils} from "../utils/Utils";
+
 const BigNumber = require("bignumber.js")
-, { exitDataToJson } = require('../utils/utils')
-, { getTransactionBytes } = require('../utils/cryptoUtils')
 , { getLastMinedTransaction} = require('./transaction')
 , { TransactionService } = require('../services')
 , { blockInterval, getProof } = require('./block');
@@ -49,12 +50,12 @@ const generateExitData = (slot, lastTransaction, cb) => {
 					if (err) return cb(err)
 					if (!prevProof) return cb({ statusCode: 500, message: 'Could not create Proof for the previous transaction' });
 
-					cb(null, { statusCode: 200, message: exitDataToJson(lastTransaction, lastProof, prevTransaction, prevProof) });
+					cb(null, { statusCode: 200, message: Utils.exitDataToJson(lastTransaction, lastProof, prevTransaction, prevProof) });
 				});
 			});
 
 		} else {
-			cb(null, { statusCode: 200, message: exitDataToJson(lastTransaction, lastProof, null, null) });
+			cb(null, { statusCode: 200, message: Utils.exitDataToJson(lastTransaction, lastProof, null, null) });
 		}
 	})
 }
@@ -68,7 +69,7 @@ const getSingleData = (hash, cb) => {
 		getProof(t.slot, t.mined_block, (err, proof) => {
 			if(err) return cb(err);
 
-			let exitingBytes = getTransactionBytes(t.slot, t.block_spent, t.recipient);
+			let exitingBytes = CryptoUtils.getTransactionBytes(t.slot, t.block_spent, t.recipient);
 
 			const exitData = {
 				slot: t.slot,

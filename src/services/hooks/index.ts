@@ -6,10 +6,10 @@ import { BigNumber } from 'bignumber.js';
 import BN from 'bn.js';
 
 const _ = require('lodash');
-const { depositBlock }	= require('../block');
+const { depositBlock }	= require('../../services/block.js');
 const { exitSlot, getOwner, resetSlot }	= require('../coinState');
 const debug	= require('debug')('app:api:hooks')
-const { getLastMinedTransaction } = require('../transaction');
+const { getLastMinedTransaction } = require('../../services/transaction.js');
 const { TransactionService } = require('../index');
 const { getChallengeAfterData, getChallengeBeforeData } = require("../challenges");
 
@@ -68,6 +68,12 @@ const onDebug = (iDebug: abiInterface) => (error: any, result: eventResultInterf
 	debug(`Debug: ${eventObj.message}`)
 };
 
+const onWithdrew = (iWithdrew: abiInterface) => (error: any, result: eventResultInterface) => {
+	if(error) return console.error(error);
+	const eventObj = eventToObj(iWithdrew, result);
+	debug(`Withdrew: ${eventObj.message}`)
+};
+
 const onDeposit = (iDeposit: abiInterface) => (error: any, result: eventResultInterface) => {
 	if(error) return console.error(error);
 	const eventObj = eventToObj(iDeposit, result);
@@ -85,88 +91,96 @@ const onDeposit = (iDeposit: abiInterface) => (error: any, result: eventResultIn
 const onExitStarted = (iExitStarted: abiInterface) => (error: any, result: eventResultInterface) => {
 	if(error) return console.error(error);
 	const eventObj = eventToObj(iExitStarted, result)
+	const slotBN = new BigNumber(eventObj.slot.toString());
 	debug(`Exit: `,eventObj);
 
-		exitSlot(eventObj.slot.toString(), (err: any) => { if (err) console.error(err) });
+	exitSlot(eventObj.slot.toString(), (err: any) => { if (err) console.error(err) });
 
-		getOwner(eventObj.slot.toString(), (err: any, owner: string) => {
-			if(err) console.error(err);
-			if(owner.toLowerCase() != eventObj.owner.toLowerCase()) {
-				debug(`ERROR: An impostor is trying to Exiting the slot ${eventObj.slot.toString()}`)
+	async.waterfall([
+		(next: any) => {
+			getOwner(eventObj.slot.toString(), next)
+		},
+		(owner: string, next: any) => {
+			const isExitCorrect = owner.toLowerCase() == eventObj.owner.toLowerCase();
+			const autoChallengeEnabled = process.env.AUTO_CHALLENGE != 'false';
+			if (isExitCorrect || !autoChallengeEnabled) return; // Nothing to do here
 
-				/// TODO: change env variable (boolean)
-				if (process.env.AUTO_CHALLENGE != 'false') {
+			debug(`An impostor is trying to Exiting the slot ${eventObj.slot.toString()}!`);
+			getExit(slotBN, next);
+		},
+		(exitData: any, next: any) => {
+			// Challenge after
+			const { exitBlock } = exitData;
+			const exitBlockBN = new BigNumber(exitBlock);
 
-					const slotBN = new BigNumber(eventObj.slot.toString());
+			TransactionService.findOne({
+				slot: slotBN,
+				block_spent: exitBlockBN,
+			}, (err: any, transaction: any) => {
+				if (err || !transaction) return next(err, exitData); // Not a challenge after
 
-					getExit(slotBN, (err: any, exitData: any) => {
-						if (err) return console.error(err)
-						const { prevBlock, exitBlock } = exitData;
+				debug("Challenging after...");
+				async.waterfall([
+					(next: any) => getChallengeAfterData(slotBN, exitBlockBN, (err: any, status: any) => {
+						next(err, status.message)
+					}),
+					(exitData: exitData, next: any) => {
+						challengeAfter(exitData.slot, exitData.challengingBlockNumber, exitData.challengingTransaction, exitData.proof, exitData.signature, next);
+					}
+				], (err: any) => {
+					if (err) return console.error(err);
+					debug('Successfully challenged after');
+					resetSlot(eventObj.slot.toString(), (err: any) => { if (err) console.error(err) });
+				});
+				return; // do not continue waterfall
+			});
+		},
+		(exitData: any, next: any) => {
+			// Challenge between
+			const { prevBlock } = exitData;
+			const prevBlockBN = new BigNumber(prevBlock);
 
-						const exitBlockBN = new BigNumber(exitBlock);
-						const prevBlockBN = new BigNumber(prevBlock);
+			TransactionService.findOne({
+				slot: slotBN,
+				block_spent: prevBlockBN,
+			}, (err: any, transaction: any) => {
+				if (err || !transaction) return next(err, exitData); // Not a challenge between
 
-						TransactionService.findOne({
-							slot: slotBN,
-							block_spent: exitBlockBN,
-						}, (err: any, transaction: any) => { /// TODO: transaction type
-							if (err) return console.error(err);
-							if (transaction) {
-								console.log("Challenging after...");
-								async.waterfall([
-									(next: any) => getChallengeAfterData(slotBN, exitBlockBN, (err: any, status: any) => {
-										next(err, status.message)
-									}),
-									(exitData: exitData, next: any) => {
-										challengeAfter(exitData.slot, exitData.challengingBlockNumber, exitData.challengingTransaction, exitData.proof, exitData.signature, next);
-									}
-								], (err: any) => {
-									if (err) return console.error(err);
-									console.log('Successfully challenged after');
-									resetSlot(eventObj.slot.toString(), (err: any) => { if (err) console.error(err) });
-								})
-							} else {
-								TransactionService.findOne({
-									slot: slotBN,
-									block_spent: prevBlockBN,
-								}, (err: any, transaction: any) => { /// TODO: transaction type
-									if (err) return console.error(err);
-									if (transaction) {
-										console.log("Challenging between...");
-										async.waterfall([
-											(next: any) => getChallengeAfterData(slotBN, prevBlockBN, (err: any, status: any) => {
-												next(err, status.message)
-											}),
-											(exitData: exitData, next: any) => {
-												challengeBetween(exitData.slot, exitData.challengingBlockNumber, exitData.challengingTransaction, exitData.proof, exitData.signature, next);
-											}
-										], (err: any) => {
-											if (err) return console.error(err);
-											console.log('Successfully challenged between');
-											resetSlot(eventObj.slot.toString(), (err: any) => { if (err) console.error(err) });
+				debug("Challenging between...");
+				async.waterfall([
+					(next: any) => getChallengeAfterData(slotBN, prevBlockBN, (err: any, status: any) => {
+						next(err, status.message)
+					}),
+					(exitData: exitData, next: any) => {
+						challengeBetween(exitData.slot, exitData.challengingBlockNumber, exitData.challengingTransaction, exitData.proof, exitData.signature, next);
+					}
+				], (err: any) => {
+					if (err) return console.error(err);
+					debug('Successfully challenged between');
+					resetSlot(eventObj.slot.toString(), (err: any) => { if (err) console.error(err) });
+				})
+				return; // do not continue waterfall
+			});
+		},
+		(exitData: any, next: any) => {
+			// Challenge before
+			const { prevBlock } = exitData;
+			const prevBlockBN = new BigNumber(prevBlock);
 
-										})
-									} else {
-										console.log("Challenging before...");
-										async.waterfall([
-											(next: any) => getChallengeBeforeData(slotBN, prevBlockBN, (err: any, status: any) => {
-												next(err, status.message)
-											}),
-											(exitData: exitData, next: any) => {
-												challengeBefore(exitData.slot, exitData.challengingTransaction, exitData.proof, exitData.challengingBlockNumber, next);
-											}
-										], (err: any) => {
-											if (err) return console.error(err);
-											console.log('Successfully challenged before');
-										});
-									}
-								})
-							}
-						})
-					})
+			debug("Challenging before...");
+			async.waterfall([
+				(next: any) => getChallengeBeforeData(slotBN, prevBlockBN, (err: any, status: any) => {
+					next(err, status.message)
+				}),
+				(exitData: exitData, next: any) => {
+					challengeBefore(exitData.slot, exitData.challengingTransaction, exitData.proof, exitData.challengingBlockNumber, next);
 				}
-			}
-	});
+			], (err: any) => {
+				if (err) return console.error(err);
+				console.log('Successfully challenged before');
+			});
+		}
+	], console.error);
 }
 
 const onFinalizedExit = (iFinalizedExit: abiInterface) => (error: any, result: eventResultInterface) => {
@@ -297,10 +311,13 @@ export function init(cb: () => void) {
 	subscribeLogEvent(RootChainContract, iChallengedExit, onChallengedExit(iChallengedExit));
 
 	const iRespondedExitChallenge = getEventInterface(RootChainContract, 'RespondedExitChallenge');
-	subscribeLogEvent(RootChainContract, iRespondedExitChallenge, onRespondedExitChallenge(iChallengedExit));
+	subscribeLogEvent(RootChainContract, iRespondedExitChallenge, onRespondedExitChallenge(iRespondedExitChallenge));
 
 	const iCoinReset = getEventInterface(RootChainContract, 'CoinReset');
 	subscribeLogEvent(RootChainContract, iCoinReset, onCoinReset(iCoinReset));
+
+	const iWithdrew = getEventInterface(RootChainContract, 'Withdrew');
+	subscribeLogEvent(RootChainContract, iCoinReset, onWithdrew(iWithdrew));
 
 	//CryptoMon
 	const CryptoMonContract = new web3.eth.Contract(CryptoMonsJson.abi,CryptoMonsJson.networks["5777"].address);
